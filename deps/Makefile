@@ -76,3 +76,8 @@ jemalloc: .make-prerequisites
 	cd jemalloc && $(MAKE) CFLAGS="$(JEMALLOC_CFLAGS)" LDFLAGS="$(JEMALLOC_LDFLAGS)" lib/libjemalloc.a
 
 .PHONY: jemalloc
+
+liblmdb:
+	cd mdb/libraries/liblmdb && $(MAKE) liblmdb.a
+
+.PHONY: liblmdb

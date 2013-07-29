@@ -113,6 +113,26 @@ struct redisCommand *commandTable;
  * M: Do not automatically propagate the command on MONITOR.
  */
 struct redisCommand redisCommandTable[] = {
+    {"mmflushdb",mdbFlushdbCommand,1,"w",0,NULL,0,0,0,0,0},
+    {"mmdbsize",mdbDbsizeCommand,1,"r",0,NULL,0,0,0,0,0},
+    {"mmget",mdbGetCommand,2,"r",0,NULL,1,1,1,0,0},
+    {"mmset",mdbSetCommand,-3,"wm",0,noPreloadGetKeys,1,1,1,0,0},
+    {"mmdel",mdbDelCommand,-2,"w",0,noPreloadGetKeys,1,-1,1,0,0},
+    {"mmexists",mdbExistsCommand,2,"r",0,NULL,1,1,1,0,0},
+    {"mmtype",mdbTypeCommand,2,"r",0,NULL,1,1,1,0,0},
+    {"mmstrlen",mdbStrlenCommand,2,"r",0,NULL,1,1,1,0,0},
+    {"mmincrby",mdbIncrbyCommand,3,"w",0,NULL,1,1,1,0,0},
+    {"mmttl",mdbTtlCommand,2,"r",0,NULL,1,1,1,0,0},
+    {"mmpttl",mdbPttlCommand,2,"r",0,NULL,1,1,1,0,0},
+    {"mmexpire",mdbExpireCommand,3,"w",0,NULL,1,1,1,0,0},
+    {"mmexpireat",mdbExpireatCommand,3,"w",0,NULL,1,1,1,0,0},
+    {"mmpexpire",mdbPexpireCommand,3,"w",0,NULL,1,1,1,0,0},
+    {"mmpexpireat",mdbPexpireatCommand,3,"w",0,NULL,1,1,1,0,0},
+    {"mmdebug",mdbDebugCommand,-2,"as",0,NULL,0,0,0,0,0},
+    {"mminfo",mdbInfoCommand,1,"rlt",0,NULL,0,0,0,0,0},
+    {"mmkeys",mdbKeysCommand,2,"rS",0,NULL,0,0,0,0,0},
+    {"mmappend",mdbAppendCommand,3,"w",0,NULL,1,1,1,0,0},
+    {"mmgetrange",mdbGetrangeCommand,4,"r",0,NULL,1,1,1,0,0},
     {"get",getCommand,2,"r",0,NULL,1,1,1,0,0},
     {"set",setCommand,-3,"wm",0,noPreloadGetKeys,1,1,1,0,0},
     {"setnx",setnxCommand,3,"wm",0,noPreloadGetKeys,1,1,1,0,0},
@@ -959,6 +979,9 @@ int serverCron(struct aeEventLoop *eventLoop, long long id, void *clientData) {
     /* Handle background operations on Redis databases. */
     databasesCron();
 
+    /* Handle background operations on MDB. */
+    mdbCron();
+
     /* Start a scheduled AOF rewrite if this was requested by the user while
      * a BGSAVE was in progress. */
     if (server.rdb_child_pid == -1 && server.aof_child_pid == -1 &&
@@ -975,7 +998,7 @@ int serverCron(struct aeEventLoop *eventLoop, long long id, void *clientData) {
         if ((pid = wait3(&statloc,WNOHANG,NULL)) != 0) {
             int exitcode = WEXITSTATUS(statloc);
             int bysignal = 0;
-            
+
             if (WIFSIGNALED(statloc)) bysignal = WTERMSIG(statloc);
 
             if (pid == server.rdb_child_pid) {
@@ -1265,7 +1288,10 @@ void initServerConfig() {
     server.lpushCommand = lookupCommandByCString("lpush");
     server.lpopCommand = lookupCommandByCString("lpop");
     server.rpopCommand = lookupCommandByCString("rpop");
-    
+
+    /* MDB */
+    mdbInitConfig();
+
     /* Slow log */
     server.slowlog_log_slower_than = REDIS_SLOWLOG_LOG_SLOWER_THAN;
     server.slowlog_max_len = REDIS_SLOWLOG_MAX_LEN;
@@ -1301,7 +1327,7 @@ void adjustOpenFilesLimit(void) {
          * for our needs. */
         if (oldlimit < maxfiles) {
             rlim_t f;
-            
+
             f = maxfiles;
             while(f > oldlimit) {
                 limit.rlim_cur = f;
@@ -1437,6 +1463,7 @@ void initServer() {
     scriptingInit();
     slowlogInit();
     bioInit();
+    mdbInit();
 }
 
 /* Populates the Redis Command Table starting from the hard coded list
@@ -1958,7 +1985,7 @@ sds genRedisInfoString(char *section) {
 
         if (server.sentinel_mode) mode = "sentinel";
         else mode = "standalone";
-    
+
         if (sections++) info = sdscat(info,"\r\n");
         uname(&name);
         info = sdscatprintf(info,

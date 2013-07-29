@@ -28,6 +28,7 @@ set ::all_tests {
     unit/multi
     unit/quit
     unit/aofrw
+    integration/mdb
     integration/replication
     integration/replication-2
     integration/replication-3
@@ -43,6 +44,7 @@ set ::all_tests {
     unit/limits
     unit/obuf-limits
     unit/dump
+    unit/mdb
     unit/bitops
 }
 # Index to the next test to run in the ::all_tests list.

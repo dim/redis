@@ -335,6 +335,12 @@ void loadServerConfigFromString(char *config) {
         } else if (!strcasecmp(argv[0],"dbfilename") && argc == 2) {
             zfree(server.rdb_filename);
             server.rdb_filename = zstrdup(argv[1]);
+        } else if (!strcasecmp(argv[0],"mdbenabled") && argc == 2) {
+            if ((mdbc.enabled = yesnotoi(argv[1])) == -1) {
+                err = "argument must be 'yes' or 'no'"; goto loaderr;
+            }
+        } else if (!strcasecmp(argv[0],"mdbmapsize") && argc == 2) {
+            mdbc.mapsize = memtoll(argv[1],NULL);
         } else if (!strcasecmp(argv[0],"hash-max-ziplist-entries") && argc == 2) {
             server.hash_max_ziplist_entries = memtoll(argv[1], NULL);
         } else if (!strcasecmp(argv[0],"hash-max-ziplist-value") && argc == 2) {
@@ -839,6 +845,7 @@ void configGetCommand(redisClient *c) {
     config_get_numerical_field("repl-ping-slave-period",server.repl_ping_slave_period);
     config_get_numerical_field("repl-timeout",server.repl_timeout);
     config_get_numerical_field("maxclients",server.maxclients);
+    config_get_numerical_field("mdbmapsize",mdbc.mapsize);
     config_get_numerical_field("watchdog-period",server.watchdog_period);
     config_get_numerical_field("slave-priority",server.slave_priority);
     config_get_numerical_field("hz",server.hz);
@@ -856,6 +863,7 @@ void configGetCommand(redisClient *c) {
     config_get_bool_field("rdbcompression", server.rdb_compression);
     config_get_bool_field("rdbchecksum", server.rdb_checksum);
     config_get_bool_field("activerehashing", server.activerehashing);
+    config_get_bool_field("mdbenabled", mdbc.enabled);
     config_get_bool_field("repl-disable-tcp-nodelay",
             server.repl_disable_tcp_nodelay);
     config_get_bool_field("aof-rewrite-incremental-fsync",

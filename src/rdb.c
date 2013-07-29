@@ -671,7 +671,7 @@ int rdbSave(char *filename) {
             sds keystr = dictGetKey(de);
             robj key, *o = dictGetVal(de);
             long long expire;
-            
+
             initStaticStringObject(key,keystr);
             expire = getExpire(db,&key);
             if (rdbSaveKeyValuePair(&rdb,&key,o,expire,now) == -1) goto werr;
@@ -679,6 +679,9 @@ int rdbSave(char *filename) {
         dictReleaseIterator(di);
     }
     di = NULL; /* So that we don't release it again on error. */
+
+    /* Store MDB contents */
+    if (mdbRdbSave(&rdb, now) == -1) goto werr;
 
     /* EOF opcode */
     if (rdbSaveType(&rdb,REDIS_RDB_OPCODE_EOF) == -1) goto werr;
@@ -723,6 +726,7 @@ int rdbSaveBackground(char *filename) {
 
     server.dirty_before_bgsave = server.dirty;
     server.lastbgsave_try = time(NULL);
+    mdbEnvClose();
 
     start = ustime();
     if ((childpid = fork()) == 0) {
@@ -731,6 +735,7 @@ int rdbSaveBackground(char *filename) {
         /* Child */
         if (server.ipfd > 0) close(server.ipfd);
         if (server.sofd > 0) close(server.sofd);
+        mdbEnvOpen();
         retval = rdbSave(filename);
         if (retval == REDIS_OK) {
             size_t private_dirty = zmalloc_get_private_dirty();
@@ -745,6 +750,7 @@ int rdbSaveBackground(char *filename) {
     } else {
         /* Parent */
         server.stat_fork_time = ustime()-start;
+        mdbEnvOpen();
         if (childpid == -1) {
             redisLog(REDIS_WARNING,"Can't save in background: fork: %s",
                 strerror(errno));
@@ -1124,6 +1130,12 @@ int rdbLoad(char *filename) {
         if (type == REDIS_RDB_OPCODE_SELECTDB) {
             if ((dbid = rdbLoadLen(&rdb,NULL)) == REDIS_RDB_LENERR)
                 goto eoferr;
+
+            if (dbid == mdbc.dbid) {
+                if (mdbRdbLoad(&rdb, loops) == REDIS_ERR) goto eoferr;
+                break;
+            }
+
             if (dbid >= (unsigned)server.dbnum) {
                 redisLog(REDIS_WARNING,"FATAL: Data file was created with a Redis server configured to handle more than %d databases. Exiting\n", server.dbnum);
                 exit(1);

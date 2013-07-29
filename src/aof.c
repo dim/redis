@@ -957,6 +957,8 @@ int rewriteAppendOnlyFileBackground(void) {
     long long start;
 
     if (server.aof_child_pid != -1) return REDIS_ERR;
+    mdbEnvClose();
+
     start = ustime();
     if ((childpid = fork()) == 0) {
         char tmpfile[256];
@@ -964,6 +966,7 @@ int rewriteAppendOnlyFileBackground(void) {
         /* Child */
         if (server.ipfd > 0) close(server.ipfd);
         if (server.sofd > 0) close(server.sofd);
+        mdbEnvOpen();
         snprintf(tmpfile,256,"temp-rewriteaof-bg-%d.aof", (int) getpid());
         if (rewriteAppendOnlyFile(tmpfile) == REDIS_OK) {
             size_t private_dirty = zmalloc_get_private_dirty();
@@ -980,6 +983,7 @@ int rewriteAppendOnlyFileBackground(void) {
     } else {
         /* Parent */
         server.stat_fork_time = ustime()-start;
+        mdbEnvOpen();
         if (childpid == -1) {
             redisLog(REDIS_WARNING,
                 "Can't rewrite append only file in background: fork: %s",
