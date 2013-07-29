@@ -1,4 +1,4 @@
-start_server {tags {"mdb"} overrides {mdbenabled yes}} {
+start_server {tags {"mdb"} overrides {mdbenabled yes mdbmapsize 5mb}} {
 
     test {MMFLUSHDB} {
         r mmset x 1
@@ -31,10 +31,16 @@ start_server {tags {"mdb"} overrides {mdbenabled yes}} {
     } {}
 
     test {Very big payload in MMGET/MMSET} {
-        set buf [string repeat "abcd" 100000]
+        set buf [string repeat "abcd" 1000000]
         r mmset foo $buf
         r mmget foo
-    } [string repeat "abcd" 100000]
+    } [string repeat "abcd" 1000000]
+
+    test {Doesn't segfault on commit failures} {
+        set buf [string repeat "abcd" 2000000]
+        catch {r mmset x $buf} err
+        format $err
+    } {ERR MDB_MAP_FULL: Environment mapsize limit reached}
 
     test {MMSET key too long} {
         set buf [string repeat "a" 1024]
@@ -281,7 +287,7 @@ start_server {tags {"mdb"} overrides {mdbenabled yes}} {
         r mmset x foo
         r mmset y bar
         r mminfo
-    } {MDBInfo mapsize:33554431 readers:?/* main:2}
+    } {MDBInfo mapsize:5242880 readers:?/* main:2}
 
     test {MMAPPEND basics} {
         r mmdel foo

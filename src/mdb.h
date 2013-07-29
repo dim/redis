@@ -10,7 +10,7 @@ struct mdbConfigStruct {
     MDB_txn *txn;     /* Reusable RO transaction */
     MDB_cursor *cur;  /* Reusable RO cursor */
     MDB_cursor *xmc;  /* Active expiration cursor */
-    MDB_val xmk;      /* Active expiration, last key */
+    sds xlk;          /* Active expiration, last key */
     struct redisCommand *mmdelCommand;
     robj *mmdel;
 };
@@ -22,6 +22,11 @@ typedef struct redisMdbObject {
     uint32_t len;
     robj *o;
 } rmobj;
+
+typedef struct redisMdbTransation {
+    int committed;
+    MDB_txn *t;
+} rmtxn;
 
 /* Global shared config */
 struct mdbConfigStruct mdbc;
