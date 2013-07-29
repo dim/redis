@@ -1,5 +1,7 @@
 #include "redis.h"
 #include "endianconv.h"
+#include <sys/stat.h>
+#include <fcntl.h>
 
 #define REDIS_MMSET_NO_FLAGS 0
 #define REDIS_MMSET_NX (1<<0)     /* Set if key not exists. */
@@ -206,132 +208,117 @@ static char *mdbStrType(int type) {
 
 /*================================= RDB Additions ================================= */
 
-static int mdbRdbNext(robj **key, rmobj *val) {
-    MDB_val mk, mv;
-
-    int rc = mdb_cursor_get(mdbc.cur,&mk,&mv,MDB_NEXT);
-    if (rc != MDB_SUCCESS) return rc;
-
-    *key = createObject(REDIS_STRING,sdsnewlen(mk.mv_data,mk.mv_size));
-    mdbLoadObject(&mv, val, 0);
-
-    return rc;
-}
-
 int mdbRdbSave(rio *rdb, long long now) {
     /* Skip if MDB is disabled or server is a slave */
     if (!mdbc.enabled || server.masterhost != NULL)
         return REDIS_OK;
 
-    int rc = MDB_SUCCESS;
-    MDB_stat stat;
+    int rc, fd = -1, maxtries = 5;
+    char tmpfile[256];
+    char buffer[1024*1024];
+    size_t size, chunksize;
+    struct redis_stat sb;
 
-    if ((rc = mdb_txn_renew(mdbc.txn)) != MDB_SUCCESS)
+    /* Prepare a suitable temp file for bulk transfer */
+    while(maxtries--) {
+        snprintf(tmpfile,256, "temp-%d.%ld.mdb",(int)server.unixtime,(long)getpid());
+        fd = open(tmpfile,O_CREAT|O_WRONLY|O_EXCL,0644);
+        if (fd != -1) break;
+        sleep(1);
+    }
+    if (fd == -1) {
+        redisLog(REDIS_WARNING,"MDB: Error opening temp file for MASTER <-> SLAVE sync: %s",strerror(errno));
         goto saverr;
-    if ((rc = mdb_cursor_renew(mdbc.txn, mdbc.cur)) != MDB_SUCCESS)
-        goto saverr;
-    if ((rc = mdb_stat(mdbc.txn, mdbc.maindb, &stat)) != MDB_SUCCESS)
-        goto saverr;
+    }
 
-    /* Skip if empty */
-    if (stat.ms_entries < 1)
-        goto cleanup;
+    /* Clone env */
+    rc = mdb_env_copyfd(mdbc.env, fd);
+    close(fd);
+
+    if (rc != MDB_SUCCESS) {
+        redisLog(REDIS_WARNING,"MDB: Error copying mdb env to temp file: %s",mdb_strerror(rc));
+        goto saverr;
+    }
+
+    if ((fd = open(tmpfile,O_RDONLY)) == -1 || redis_fstat(fd,&sb) == -1) {
+        redisLog(REDIS_WARNING,"MDB: Error reopening temp file for MASTER <-> SLAVE sync: %s",strerror(errno));
+        goto saverr;
+    }
 
     /* Write opcode & dbid */
     if (rdbSaveType(rdb,REDIS_RDB_OPCODE_SELECTDB) == -1) goto saverr;
     if (rdbSaveLen(rdb,mdbc.dbid) == -1) goto saverr;
 
-    /* Write key/value pairs */
-    while (1) {
-        robj *key;
-        rmobj val;
-        int retval = 0;
+    /* Write data size */
+    size = sb.st_size;
+    memrev64ifbe(&size);
+    if (rioWrite(rdb,&size,8) == 0) goto saverr;
 
-        rc = mdbRdbNext(&key,&val);
-        if (rc == MDB_NOTFOUND) {
-            rc = MDB_SUCCESS;
-            break;
-        } else if (rc != MDB_SUCCESS)
-            goto saverr;
-
-        retval = rdbSaveKeyValuePair(rdb,key,val.o,val.expireat,now);
-        decrRefCount(key);
-        decrRefCount(val.o);
-        if (retval == -1) goto saverr;
+    while ((chunksize = read(fd,buffer,sizeof(buffer))) > 0) {
+        if (rioWrite(rdb,buffer,chunksize) == 0) goto saverr;
     }
-cleanup:
-    mdb_txn_reset(mdbc.txn);
+    close(fd);
+    unlink(tmpfile);
+
     redisLog(REDIS_VERBOSE,"MDB: RDB saving complete");
     return REDIS_OK;
 saverr:
-    mdb_txn_reset(mdbc.txn);
-    if (rc != MDB_SUCCESS)
-        redisLog(REDIS_WARNING, "MDB: RDB %s", mdb_strerror(rc));
+    close(fd);
+    unlink(tmpfile);
     redisLog(REDIS_WARNING,"MDB: RDB saving failed");
     return REDIS_ERR;
 }
 
 int mdbRdbLoad(rio *rdb, long loops) {
-    MDB_txn *txn = NULL;
-    int type;
-    int perform = 0;
-    int rc = MDB_SUCCESS;
 
-    /* Open a transaction, skip if server is a master, or MDB is disabled
+    /* Skip loading if server is a master, or MDB is disabled
      * still run through the file for correct checksum */
-    if (mdbc.enabled && server.masterhost != NULL) perform = 1;
+    int perform = mdbc.enabled && server.masterhost != NULL;
+    uint64_t size, chunksize;
+    char buffer[1024*1024], datafile[8] = "data.mdb";
+    int fd = -1;
 
-    while(1) {
-        robj *key, *val;
-        long long expiretime = -1;
+    /* Read data length */
+    if (rioRead(rdb,&size,8) == 0) goto rerr;
+    memrev64ifbe(&size);
 
+    /* Close env, open data file */
+    if (perform) {
+        mdbEnvClose();
+        if ((fd = open(datafile,O_CREAT|O_WRONLY,0644)) == -1) {
+            redisLog(REDIS_WARNING,"MDB: Opening data file failed: %s",strerror(errno));
+            goto rerr;
+        }
+    }
+
+    /* Write temp file */
+    while (size > 0) {
         /* Serve the clients from time to time */
-        if (!(loops++ % 100)) {
+        if (!(loops++ % 10)) {
             loadingProgress(rioTell(rdb));
             aeProcessEvents(server.el, AE_FILE_EVENTS|AE_DONT_WAIT);
         }
 
-        /* Get type of next entry */
-        if ((type = rdbLoadType(rdb)) == -1) goto rerr;
+        chunksize = sizeof(buffer);
+        if (chunksize > size) chunksize = size;
+        if (rioRead(rdb,buffer,chunksize) == 0) goto rerr;
+        if (perform && write(fd,buffer,chunksize) == 0) goto rerr;
+        size -= chunksize;
+    }
 
-        /* Read the expiration time, if set */
-        if (type == REDIS_RDB_OPCODE_EXPIRETIME_MS) {
-            if ((expiretime = rdbLoadMillisecondTime(rdb)) == -1) goto rerr;
-            if ((type = rdbLoadType(rdb)) == -1) goto rerr;
-        }
+    /* EOF should follow in the very end */
+    if (rdbLoadType(rdb) != REDIS_RDB_OPCODE_EOF) goto rerr;
 
-        /* Stop on EOF */
-        if (type == REDIS_RDB_OPCODE_EOF) break;
-
-        /* Only strings allowed at the moment */
-        if (type != REDIS_RDB_TYPE_STRING) continue;
-
-        /* Read key/value */
-        if ((key = rdbLoadStringObject(rdb)) == NULL) goto rerr;
-        if ((val = rdbLoadObject(type,rdb)) == NULL) goto rerr;
-
-        /* Store if performing */
-        if (perform) {
-            rc = mdb_txn_begin(mdbc.env, NULL, 0, &txn);
-            if (rc == MDB_SUCCESS)
-                rc = mdbRedisPut(txn,key->ptr,val,expiretime);
-            if (rc == MDB_SUCCESS) {
-                rc = mdb_txn_commit(txn);
-                txn = NULL;
-            }
-        }
-
-        decrRefCount(key);
-        decrRefCount(val);
-        if (rc != MDB_SUCCESS) goto rerr;
+    /* Re-open env */
+    if (perform) {
+        close(fd);
+        if (mdbEnvOpen() != MDB_SUCCESS) goto rerr;
     }
 
     redisLog(REDIS_VERBOSE,"MDB: RDB load complete");
     return REDIS_OK;
 rerr:
-    if (txn) mdb_txn_abort(txn);
-    if (rc != MDB_SUCCESS)
-        redisLog(REDIS_WARNING, "MDB: RDB %s", mdb_strerror(rc));
+    close(fd);
     redisLog(REDIS_WARNING,"MDB: RDB loading failed");
     return REDIS_ERR;
 }

@@ -21,7 +21,7 @@
    Memcheck:Param
    writev(vector[...])
    ...
-   fun:mdb_page_flush.isra.18
+   fun:mdb_page_flush.isra.*
 }
 
 {
@@ -29,5 +29,5 @@
    Memcheck:Param
    pwrite64(buf)
    ...
-   fun:mdb_page_flush.isra.18
+   fun:mdb_page_flush.isra.*
 }

@@ -129,7 +129,7 @@ struct redisCommand redisCommandTable[] = {
     {"mmpexpire",mdbPexpireCommand,3,"w",0,NULL,1,1,1,0,0},
     {"mmpexpireat",mdbPexpireatCommand,3,"w",0,NULL,1,1,1,0,0},
     {"mmdebug",mdbDebugCommand,-2,"as",0,NULL,0,0,0,0,0},
-    {"mminfo",mdbInfoCommand,1,"rlt",0,NULL,0,0,0,0,0},
+    {"mminfo",mdbInfoCommand,1,"rt",0,NULL,0,0,0,0,0},
     {"mmkeys",mdbKeysCommand,2,"rS",0,NULL,0,0,0,0,0},
     {"mmappend",mdbAppendCommand,3,"w",0,NULL,1,1,1,0,0},
     {"mmgetrange",mdbGetrangeCommand,4,"r",0,NULL,1,1,1,0,0},
