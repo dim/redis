@@ -4070,7 +4070,7 @@ mdb_env_copyfd(MDB_env *env, HANDLE fd)
 		else
 			w2 = wsize;
 		wres = write(fd, ptr, w2);
-		rc = wres == (ssize_t)w2 ? MDB_SUCCESS : wres < 0 ? ErrCode() : EIO;
+		rc = wres > 0 ? MDB_SUCCESS : ErrCode();
 		if (rc) break;
 		wsize -= wres;
 		ptr += wres;

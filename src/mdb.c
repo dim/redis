@@ -213,35 +213,30 @@ int mdbRdbSave(rio *rdb, long long now) {
     if (!mdbc.enabled || server.masterhost != NULL)
         return REDIS_OK;
 
-    int rc, fd = -1, maxtries = 5;
+    int rc = MDB_SUCCESS, fd = -1;
     char tmpfile[256];
     char buffer[1024*1024];
     size_t size, chunksize;
     struct redis_stat sb;
 
-    /* Prepare a suitable temp file for bulk transfer */
-    while(maxtries--) {
-        snprintf(tmpfile,256, "temp-%d.%ld.mdb",(int)server.unixtime,(long)getpid());
-        fd = open(tmpfile,O_CREAT|O_WRONLY|O_EXCL,0644);
-        if (fd != -1) break;
-        sleep(1);
-    }
-    if (fd == -1) {
-        redisLog(REDIS_WARNING,"MDB: Error opening temp file for MASTER <-> SLAVE sync: %s",strerror(errno));
+    snprintf(tmpfile,256, "temp-%d.mdb",(int)getpid());
+    if ((fd = open(tmpfile,O_CREAT|O_WRONLY|O_EXCL,0644)) == -1) {
+        redisLog(REDIS_WARNING,"MDB: RDB opening tempfile: %s",strerror(errno));
         goto saverr;
     }
 
     /* Clone env */
     rc = mdb_env_copyfd(mdbc.env, fd);
     close(fd);
+    fd = -1;
 
     if (rc != MDB_SUCCESS) {
-        redisLog(REDIS_WARNING,"MDB: Error copying mdb env to temp file: %s",mdb_strerror(rc));
+        redisLog(REDIS_WARNING,"MDB: RDB copying to tempfile: %s",mdb_strerror(rc));
         goto saverr;
     }
 
     if ((fd = open(tmpfile,O_RDONLY)) == -1 || redis_fstat(fd,&sb) == -1) {
-        redisLog(REDIS_WARNING,"MDB: Error reopening temp file for MASTER <-> SLAVE sync: %s",strerror(errno));
+        redisLog(REDIS_WARNING,"MDB: RDB reopening tempfile: %s",strerror(errno));
         goto saverr;
     }
 
@@ -263,7 +258,7 @@ int mdbRdbSave(rio *rdb, long long now) {
     redisLog(REDIS_VERBOSE,"MDB: RDB saving complete");
     return REDIS_OK;
 saverr:
-    close(fd);
+    if (fd != -1) close(fd);
     unlink(tmpfile);
     redisLog(REDIS_WARNING,"MDB: RDB saving failed");
     return REDIS_ERR;
