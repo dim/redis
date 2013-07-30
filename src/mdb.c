@@ -7,6 +7,7 @@
 #define REDIS_MMSET_NX (1<<0)     /* Set if key not exists. */
 #define REDIS_MMSET_XX (1<<1)     /* Set if key exists. */
 #define REDIS_MDB_ROLLBACK (MDB_LAST_ERRCODE+1)
+#define REDIS_MDB_CHUNKSIZE (64*1024)
 
 #if (BYTE_ORDER == LITTLE_ENDIAN)
 #define htonll(v) intrev64(v)
@@ -215,7 +216,7 @@ int mdbRdbSave(rio *rdb, long long now) {
 
     int rc = MDB_SUCCESS, fd = -1;
     char tmpfile[256];
-    char buffer[1024*1024];
+    char buffer[REDIS_MDB_CHUNKSIZE];
     size_t size, chunksize;
     struct redis_stat sb;
 
@@ -249,7 +250,7 @@ int mdbRdbSave(rio *rdb, long long now) {
     memrev64ifbe(&size);
     if (rioWrite(rdb,&size,8) == 0) goto saverr;
 
-    while ((chunksize = read(fd,buffer,sizeof(buffer))) > 0) {
+    while ((chunksize = read(fd,buffer,REDIS_MDB_CHUNKSIZE)) > 0) {
         if (rioWrite(rdb,buffer,chunksize) == 0) goto saverr;
     }
     close(fd);
@@ -270,7 +271,7 @@ int mdbRdbLoad(rio *rdb, long loops) {
      * still run through the file for correct checksum */
     int perform = mdbc.enabled && server.masterhost != NULL;
     uint64_t size, chunksize;
-    char buffer[1024*1024], datafile[8] = "data.mdb";
+    char buffer[REDIS_MDB_CHUNKSIZE], datafile[8] = "data.mdb";
     int fd = -1;
 
     /* Read data length */
@@ -294,7 +295,7 @@ int mdbRdbLoad(rio *rdb, long loops) {
             aeProcessEvents(server.el, AE_FILE_EVENTS|AE_DONT_WAIT);
         }
 
-        chunksize = sizeof(buffer);
+        chunksize = REDIS_MDB_CHUNKSIZE;
         if (chunksize > size) chunksize = size;
         if (rioRead(rdb,buffer,chunksize) == 0) goto rerr;
         if (perform && write(fd,buffer,chunksize) == 0) goto rerr;
