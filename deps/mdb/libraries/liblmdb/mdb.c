@@ -2980,11 +2980,11 @@ mdb_env_init_meta(MDB_env *env, MDB_meta *meta)
 		OVERLAPPED ov;
 		memset(&ov, 0, sizeof(ov));
 		rc = WriteFile(env->me_fd, p, psize * 2, &len, &ov);
-		rc = rc ? (len == psize * 2 ? MDB_SUCCESS : EIO) : ErrCode();
+		rc = (len == psize * 2) ? MDB_SUCCESS : ErrCode();
 	}
 #else
 	rc = pwrite(env->me_fd, p, psize * 2, 0);
-	rc = (rc == (int)psize * 2) ? MDB_SUCCESS : rc < 0 ? ErrCode() : EIO;
+	rc = (rc == (int)psize * 2) ? MDB_SUCCESS : ErrCode();
 #endif
 	free(p);
 	return rc;
@@ -4007,6 +4007,14 @@ mdb_env_copyfd(MDB_env *env, HANDLE fd)
 	int rc;
 	size_t wsize;
 	char *ptr;
+#ifdef _WIN32
+	DWORD len, w2;
+#define DOWRITE(fd, ptr, w2, len)	WriteFile(fd, ptr, w2, &len)
+#else
+	ssize_t len;
+	size_t w2;
+#define DOWRITE(fd, ptr, w2, len)	len = write(fd, ptr, w2)
+#endif
 
 	/* Do the lock/unlock of the reader mutex before starting the
 	 * write txn.  Otherwise other read txns could block writers.
@@ -4030,52 +4038,50 @@ mdb_env_copyfd(MDB_env *env, HANDLE fd)
 	}
 
 	wsize = env->me_psize * 2;
-#ifdef _WIN32
+	ptr = env->me_map;
 	{
-		DWORD len;
-		rc = WriteFile(fd, env->me_map, wsize, &len, NULL);
-		rc = rc ? (len == wsize ? MDB_SUCCESS : EIO) : ErrCode();
+		w2 = wsize;
+		while (w2 > 0) {
+			DOWRITE(fd, ptr, w2, len);
+			if (len > 0) {
+				rc = MDB_SUCCESS;
+				ptr += len;
+				w2 -= len;
+				continue;
+			} else {
+				/* Non-blocking or async handles are not supported */
+				rc = ErrCode();
+				if (!rc)
+					rc = EIO;
+				break;
+			}
+		}
 	}
-#else
-	rc = write(fd, env->me_map, wsize);
-	rc = rc == (int)wsize ? MDB_SUCCESS : rc < 0 ? ErrCode() : EIO;
-#endif
 	if (env->me_txns)
 		UNLOCK_MUTEX_W(env);
 
 	if (rc)
 		goto leave;
 
-	ptr = env->me_map + wsize;
 	wsize = txn->mt_next_pgno * env->me_psize - wsize;
-#ifdef _WIN32
 	while (wsize > 0) {
-		DWORD len, w2;
 		if (wsize > MAX_WRITE)
 			w2 = MAX_WRITE;
 		else
 			w2 = wsize;
-		rc = WriteFile(fd, ptr, w2, &len, NULL);
-		rc = rc ? (len == w2 ? MDB_SUCCESS : EIO) : ErrCode();
-		if (rc) break;
-		wsize -= w2;
-		ptr += w2;
+		DOWRITE(fd, ptr, w2, len);
+		if (len > 0) {
+			rc = MDB_SUCCESS;
+			ptr += len;
+			wsize -= len;
+			continue;
+		} else {
+			rc = ErrCode();
+			if (!rc)
+				rc = EIO;
+			break;
+		}
 	}
-#else
-	while (wsize > 0) {
-		size_t w2;
-		ssize_t wres;
-		if (wsize > MAX_WRITE)
-			w2 = MAX_WRITE;
-		else
-			w2 = wsize;
-		wres = write(fd, ptr, w2);
-		rc = wres > 0 ? MDB_SUCCESS : ErrCode();
-		if (rc) break;
-		wsize -= wres;
-		ptr += wres;
-	}
-#endif
 
 leave:
 	mdb_txn_abort(txn);
@@ -7682,7 +7688,12 @@ mdb_env_info(MDB_env *env, MDB_envinfo *arg)
 	arg->me_mapaddr = (env->me_flags & MDB_FIXEDMAP) ? env->me_map : 0;
 	arg->me_mapsize = env->me_mapsize;
 	arg->me_maxreaders = env->me_maxreaders;
-	arg->me_numreaders = env->me_numreaders;
+
+	/* me_numreaders may be zero if this process never used any readers. Use
+	 * the shared numreader count if it exists.
+	 */
+	arg->me_numreaders = env->me_txns ? env->me_txns->mti_numreaders : env->me_numreaders;
+
 	arg->me_last_pgno = env->me_metas[toggle]->mm_last_pg;
 	arg->me_last_txnid = env->me_metas[toggle]->mm_txnid;
 	return MDB_SUCCESS;
@@ -8133,3 +8144,52 @@ int mdb_reader_check(MDB_env *env, int *dead)
 	return MDB_SUCCESS;
 }
 /** @} */
+
+int
+mdb_env_copycb(MDB_env *env, void *ceo,
+	int (*write_header_cb)(void*, size_t, size_t, char*),
+	int (*write_body_cb)(void*, size_t, size_t, char*))
+{
+	MDB_txn *txn = NULL;
+	int rc;
+	size_t wsize, total;
+	char *ptr;
+
+	/* Do the lock/unlock of the reader mutex before starting the
+	 * write txn.  Otherwise other read txns could block writers.
+	 */
+	rc = mdb_txn_begin(env, NULL, MDB_RDONLY, &txn);
+	if (rc)
+		return rc;
+
+	if (env->me_txns) {
+		/* We must start the actual read txn after blocking writers */
+		mdb_txn_reset0(txn, "reset-stage1");
+
+		/* Temporarily block writers until we snapshot the meta pages */
+		LOCK_MUTEX_W(env);
+
+		rc = mdb_txn_renew0(txn);
+		if (rc) {
+			UNLOCK_MUTEX_W(env);
+			goto leave;
+		}
+	}
+
+	total = txn->mt_next_pgno * env->me_psize;
+	wsize = env->me_psize * 2;
+	ptr = env->me_map;
+	rc = write_header_cb(ceo, wsize, total, ptr);
+
+	if (env->me_txns)
+		UNLOCK_MUTEX_W(env);
+	if (rc)
+		goto leave;
+
+	ptr += wsize;
+	wsize = total - wsize;
+	rc = write_body_cb(ceo, wsize, total, ptr);
+leave:
+	mdb_txn_abort(txn);
+	return rc;
+}

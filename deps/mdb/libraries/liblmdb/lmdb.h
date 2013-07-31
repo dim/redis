@@ -1325,6 +1325,11 @@ int	mdb_reader_list(MDB_env *env, MDB_msg_func *func, void *ctx);
 int	mdb_reader_check(MDB_env *env, int *dead);
 /**	@} */
 
+int
+mdb_env_copycb(MDB_env *env, void *ceo,
+	int (*write_header_cb)(void*, size_t, size_t, char*),
+	int (*write_body_cb)(void*, size_t, size_t, char*));
+
 #ifdef __cplusplus
 }
 #endif

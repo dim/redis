@@ -141,7 +141,7 @@ static int mdbRedisExpire(MDB_val *mk) {
     switch(rc = mdb_del(txn,mdbc.maindb,mk,NULL)) {
     case MDB_SUCCESS:
         rc = mdb_txn_commit(txn);
-        if (rc == MDB_SUCCESS) mdbPropagateExpire(mk);
+        if (!rc) mdbPropagateExpire(mk);
         break;
     case MDB_NOTFOUND: rc = MDB_SUCCESS;
     default: mdb_txn_abort(txn);
@@ -209,58 +209,52 @@ static char *mdbStrType(int type) {
 
 /*================================= RDB Additions ================================= */
 
+static int mdbRdbSaveBody(void *ceo, size_t size, size_t total, char *ptr) {
+    rio *rdb = (rio*) ceo;
+    ssize_t chunksize = REDIS_MDB_CHUNKSIZE;
+    REDIS_NOTUSED(total);
+
+    while (size > 0) {
+        if (size < chunksize) chunksize = size;
+        if (rioWrite(rdb,ptr,chunksize) == 0) return errno;
+        ptr += chunksize;
+        size -= chunksize;
+    }
+
+    return 0;
+}
+
+static int mdbRdbSaveHeader(void *ceo, size_t size, size_t total, char *ptr) {
+    rio *rdb = (rio*) ceo;
+    size_t prefix = total;
+    memrev64ifbe(&prefix);
+    if (rioWrite(rdb,&prefix,8) == 0) return errno;
+
+    redisLog(REDIS_NOTICE,"MDB: RDB saving %zu bytes", total);
+    return mdbRdbSaveBody(ceo, size, total, ptr);
+}
+
 int mdbRdbSave(rio *rdb, long long now) {
+    int rc = MDB_SUCCESS;
+
     /* Skip if MDB is disabled or server is a slave */
     if (!mdbc.enabled || server.masterhost != NULL)
         return REDIS_OK;
-
-    int rc = MDB_SUCCESS, fd = -1;
-    char tmpfile[256];
-    char buffer[REDIS_MDB_CHUNKSIZE];
-    size_t size, chunksize;
-    struct redis_stat sb;
-
-    snprintf(tmpfile,256, "temp-%d.mdb",(int)getpid());
-    if ((fd = open(tmpfile,O_CREAT|O_WRONLY|O_EXCL,0644)) == -1) {
-        redisLog(REDIS_WARNING,"MDB: RDB opening tempfile: %s",strerror(errno));
-        goto saverr;
-    }
-
-    /* Clone env */
-    rc = mdb_env_copyfd(mdbc.env, fd);
-    close(fd);
-    fd = -1;
-
-    if (rc != MDB_SUCCESS) {
-        redisLog(REDIS_WARNING,"MDB: RDB copying to tempfile: %s",mdb_strerror(rc));
-        goto saverr;
-    }
-
-    if ((fd = open(tmpfile,O_RDONLY)) == -1 || redis_fstat(fd,&sb) == -1) {
-        redisLog(REDIS_WARNING,"MDB: RDB reopening tempfile: %s",strerror(errno));
-        goto saverr;
-    }
 
     /* Write opcode & dbid */
     if (rdbSaveType(rdb,REDIS_RDB_OPCODE_SELECTDB) == -1) goto saverr;
     if (rdbSaveLen(rdb,mdbc.dbid) == -1) goto saverr;
 
-    /* Write data size */
-    size = sb.st_size;
-    memrev64ifbe(&size);
-    if (rioWrite(rdb,&size,8) == 0) goto saverr;
-
-    while ((chunksize = read(fd,buffer,REDIS_MDB_CHUNKSIZE)) > 0) {
-        if (rioWrite(rdb,buffer,chunksize) == 0) goto saverr;
+    /* Clone env */
+    rc = mdb_env_copycb(mdbc.env, rdb, mdbRdbSaveHeader, mdbRdbSaveBody);
+    if (rc != MDB_SUCCESS) {
+        redisLog(REDIS_WARNING,"MDB: RDB copying failed: %s",mdb_strerror(rc));
+        goto saverr;
     }
-    close(fd);
-    unlink(tmpfile);
 
     redisLog(REDIS_VERBOSE,"MDB: RDB saving complete");
     return REDIS_OK;
 saverr:
-    if (fd != -1) close(fd);
-    unlink(tmpfile);
     redisLog(REDIS_WARNING,"MDB: RDB saving failed");
     return REDIS_ERR;
 }
@@ -277,6 +271,7 @@ int mdbRdbLoad(rio *rdb, long loops) {
     /* Read data length */
     if (rioRead(rdb,&size,8) == 0) goto rerr;
     memrev64ifbe(&size);
+    redisLog(REDIS_NOTICE,"MDB: RDB loading %zu bytes", size);
 
     /* Close env, open data file */
     if (perform) {
@@ -325,36 +320,27 @@ rerr:
 int mdbEnvOpen(void) {
     if (!mdbc.enabled) return MDB_SUCCESS;
 
-    int rc = MDB_SUCCESS;
     MDB_txn *txn = NULL;
-
-    if ((rc = mdb_env_create(&mdbc.env)) != MDB_SUCCESS)
-        goto cleanup;
-    if ((rc = mdb_env_set_mapsize(mdbc.env, mdbc.mapsize)) != MDB_SUCCESS)
-        goto cleanup;
-    if ((rc = mdb_env_set_maxreaders(mdbc.env, server.maxclients)) != MDB_SUCCESS)
-        goto cleanup;
-    if ((rc = mdb_env_set_maxdbs(mdbc.env, 1)) != MDB_SUCCESS)
-        goto cleanup;
-    if ((rc = mdb_env_open(mdbc.env, ".", MDB_NOSYNC, 0644)) != MDB_SUCCESS)
-        goto cleanup;
-    if ((rc = mdb_txn_begin(mdbc.env, NULL, 0, &txn)) != MDB_SUCCESS)
-        goto cleanup;
-    if ((rc = mdb_dbi_open(txn, NULL, MDB_CREATE, &mdbc.maindb)) != MDB_SUCCESS)
-        goto cleanup;
-    if ((rc = mdb_txn_commit(txn)) != MDB_SUCCESS)
-        goto cleanup;
-    if ((rc = mdb_txn_begin(mdbc.env, NULL, MDB_RDONLY, &mdbc.txn)) != MDB_SUCCESS)
-        goto cleanup;
-    if ((rc = mdb_cursor_open(mdbc.txn, mdbc.maindb, &mdbc.cur)) != MDB_SUCCESS)
-        goto cleanup;
-    if ((rc = mdb_cursor_open(mdbc.txn, mdbc.maindb, &mdbc.xmc)) != MDB_SUCCESS)
-        goto cleanup;
-    mdb_txn_reset(mdbc.txn);
-
-    txn = NULL;
-cleanup:
+    int rc = mdb_env_create(&mdbc.env);
+    if (!rc) rc = mdb_env_set_mapsize(mdbc.env, mdbc.mapsize);
+    if (!rc) rc = mdb_env_set_maxreaders(mdbc.env, server.maxclients);
+    if (!rc) rc = mdb_env_set_maxdbs(mdbc.env, 1);
+    if (!rc) rc = mdb_env_open(mdbc.env, ".", MDB_NOSYNC, 0644);
+    if (!rc) rc = mdb_txn_begin(mdbc.env, NULL, 0, &txn);
+    if (!rc) rc = mdb_dbi_open(txn, NULL, MDB_CREATE, &mdbc.maindb);
+    if (!rc) {
+        rc = mdb_txn_commit(txn);
+        txn = NULL;
+    }
     if (txn) mdb_txn_abort(txn);
+
+    if (!rc) rc = mdb_txn_begin(mdbc.env, NULL, MDB_RDONLY, &mdbc.txn);
+    if (!rc && mdbc.cur == NULL)
+        rc = mdb_cursor_open(mdbc.txn, mdbc.maindb, &mdbc.cur);
+    if (!rc && mdbc.xmc == NULL)
+        rc = mdb_cursor_open(mdbc.txn, mdbc.maindb, &mdbc.xmc);
+    if (mdbc.txn) mdb_txn_reset(mdbc.txn);
+
     return rc;
 }
 
@@ -362,10 +348,6 @@ cleanup:
 void mdbEnvClose(void) {
     if (!mdbc.enabled) return;
 
-    mdb_cursor_close(mdbc.cur);
-    mdbc.cur = NULL;
-    mdb_cursor_close(mdbc.xmc);
-    mdbc.xmc = NULL;
     mdb_txn_abort(mdbc.txn);
     mdbc.txn = NULL;
     if (mdbc.maindb > 0) mdb_dbi_close(mdbc.env, mdbc.maindb);
@@ -492,7 +474,7 @@ void mdbCron(void) {
 int mdbDbsize(redisClient *c) {
     MDB_stat stat;
     int rc = mdb_stat(mdbc.txn, mdbc.maindb, &stat);
-    if (rc == MDB_SUCCESS)
+    if (!rc)
         addReplyLongLong(c,stat.ms_entries);
     return rc;
 }
@@ -532,7 +514,7 @@ int mdbInfo(redisClient *c) {
 int mdbDebugObject(redisClient *c) {
     rmobj mo;
     int rc = mdbRedisFindOrReply(c,c->argv[2]->ptr,&mo,1,shared.nokeyerr);
-    if (rc == MDB_SUCCESS)
+    if (!rc)
         addReplyStatusFormat(c,
             "Value type:%s encoding:%s "
             "length:%" PRIu32 " expiration:%" PRId64,
@@ -566,7 +548,7 @@ int mdbKeys(redisClient *c) {
 int mdbGet(redisClient *c) {
     rmobj mo;
     int rc = mdbRedisFindOrReply(c,c->argv[1]->ptr,&mo,0,shared.nullbulk);
-    if (rc == MDB_SUCCESS) {
+    if (!rc) {
         addReplyBulk(c,mo.o);
         decrRefCount(mo.o);
     }
@@ -624,8 +606,8 @@ int mdbSet(redisClient *c, rmtxn *txn) {
     }
 
     int rc = mdbRedisPut(txn->t, c->argv[1]->ptr, c->argv[2], expiretime);
-    if (rc == MDB_SUCCESS) rc = mdbRedisCommit(txn);
-    if (rc != MDB_SUCCESS) return rc;
+    if (!rc) rc = mdbRedisCommit(txn);
+    if (rc) return rc;
 
     addReply(c,shared.ok);
     server.dirty++;
@@ -680,7 +662,7 @@ int mdbType(redisClient *c) {
 int mdbStrlen(redisClient *c) {
     rmobj mo;
     int rc = mdbRedisFindOrReply(c,c->argv[1]->ptr,&mo,1,shared.czero);
-    if (rc == MDB_SUCCESS) addReplyLongLong(c,mo.len);
+    if (!rc) addReplyLongLong(c,mo.len);
     return rc;
 }
 
@@ -720,8 +702,8 @@ int mdbIncrby(redisClient *c, rmtxn *txn) {
     rc = mdbRedisPut(txn->t,c->argv[1]->ptr,new,old.expireat);
     decrRefCount(new);
 
-    if (rc == MDB_SUCCESS) rc = mdbRedisCommit(txn);
-    if (rc != MDB_SUCCESS) return rc;
+    if (!rc) rc = mdbRedisCommit(txn);
+    if (rc) return rc;
 
     addReplyLongLong(c,newval);
     server.dirty++;
@@ -733,7 +715,7 @@ int mdbTtlGeneric(redisClient *c, int output_ms) {
     rmobj mo;
 
     int rc = mdbRedisFindOrReply(c,c->argv[1]->ptr,&mo,1,shared.cnegone);
-    if (rc == MDB_SUCCESS) {
+    if (!rc) {
         if (mo.expireat != -1) {
             ttl = mo.expireat-mstime();
             if (ttl < 0) ttl = -1;
@@ -774,8 +756,8 @@ int mdbExpireGeneric(redisClient *c, rmtxn *txn, long long basetime, int unit) {
     rc = mdbRedisPut(txn->t,c->argv[1]->ptr,mo.o,mo.expireat);
     decrRefCount(mo.o);
 
-    if (rc == MDB_SUCCESS) rc = mdbRedisCommit(txn);
-    if (rc == MDB_SUCCESS) {
+    if (!rc) rc = mdbRedisCommit(txn);
+    if (!rc) {
         addReply(c,shared.cone);
         server.dirty++;
     }
@@ -813,8 +795,8 @@ int mdbAppend(redisClient *c, rmtxn *txn) {
     default: return rc;
     }
 
-    if (rc == MDB_SUCCESS) rc = mdbRedisCommit(txn);
-    if (rc == MDB_SUCCESS) {
+    if (!rc) rc = mdbRedisCommit(txn);
+    if (!rc) {
         server.dirty++;
         addReplyLongLong(c,totlen);
     }

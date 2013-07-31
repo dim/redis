@@ -746,6 +746,7 @@ int rdbSaveBackground(char *filename) {
                     private_dirty/(1024*1024));
             }
         }
+        mdbEnvClose();
         exitFromChild((retval == REDIS_OK) ? 0 : 1);
     } else {
         /* Parent */
