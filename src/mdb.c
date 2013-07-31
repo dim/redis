@@ -7,7 +7,7 @@
 #define REDIS_MMSET_NX (1<<0)     /* Set if key not exists. */
 #define REDIS_MMSET_XX (1<<1)     /* Set if key exists. */
 #define REDIS_MDB_ROLLBACK (MDB_LAST_ERRCODE+1)
-#define REDIS_MDB_CHUNKSIZE (64*1024)
+#define REDIS_MDB_CHUNKSIZE 1024
 
 #if (BYTE_ORDER == LITTLE_ENDIAN)
 #define htonll(v) intrev64(v)
@@ -230,7 +230,6 @@ static int mdbRdbSaveHeader(void *ceo, size_t size, size_t total, char *ptr) {
     memrev64ifbe(&prefix);
     if (rioWrite(rdb,&prefix,8) == 0) return errno;
 
-    redisLog(REDIS_NOTICE,"MDB: RDB saving %zu bytes", total);
     return mdbRdbSaveBody(ceo, size, total, ptr);
 }
 
@@ -245,7 +244,7 @@ int mdbRdbSave(rio *rdb, long long now) {
     if (rdbSaveType(rdb,REDIS_RDB_OPCODE_SELECTDB) == -1) goto saverr;
     if (rdbSaveLen(rdb,mdbc.dbid) == -1) goto saverr;
 
-    /* Clone env */
+    /* Copy env to RDB */
     rc = mdb_env_copycb(mdbc.env, rdb, mdbRdbSaveHeader, mdbRdbSaveBody);
     if (rc != MDB_SUCCESS) {
         redisLog(REDIS_WARNING,"MDB: RDB copying failed: %s",mdb_strerror(rc));
@@ -271,7 +270,6 @@ int mdbRdbLoad(rio *rdb, long loops) {
     /* Read data length */
     if (rioRead(rdb,&size,8) == 0) goto rerr;
     memrev64ifbe(&size);
-    redisLog(REDIS_NOTICE,"MDB: RDB loading %zu bytes", size);
 
     /* Close env, open data file */
     if (perform) {
