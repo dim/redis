@@ -358,7 +358,7 @@ void mdbEnvClose(void) {
 static int mdbActiveExpireRun(void) {
     int rc = MDB_SUCCESS, expired = 0;
     long long now = mstime();
-    long num = REDIS_EXPIRELOOKUPS_PER_CRON;
+    long num = ACTIVE_EXPIRE_CYCLE_LOOKUPS_PER_LOOP;
     int lookup = MDB_SET_RANGE;
     MDB_val mk = {sdslen(mdbc.xlk), mdbc.xlk}, mv;
 
@@ -420,7 +420,7 @@ void mdbInitConfig(void) {
 void mdbInit(void) {
     /* If disabled, delete all commands and return */
     if (!mdbc.enabled) {
-        dictIterator *di = dictGetIterator(server.commands);
+        dictIterator *di = dictGetSafeIterator(server.commands);
         dictEntry *de;
         int retval;
 
@@ -453,7 +453,7 @@ void mdbCron(void) {
         unsigned int iteration = 0;
         long long start = ustime(), timelimit;
 
-        timelimit = 1000000*REDIS_EXPIRELOOKUPS_TIME_PERC/server.hz/100;
+        timelimit = 1000000*ACTIVE_EXPIRE_CYCLE_SLOW_TIME_PERC/server.hz/100;
         if (timelimit <= 0) timelimit = 1;
 
         do {
@@ -463,7 +463,7 @@ void mdbCron(void) {
             iteration++;
             if ((iteration & 0xf) == 0 && (ustime()-start) > timelimit) break;
 
-        } while (expired > REDIS_EXPIRELOOKUPS_PER_CRON/4);
+        } while (expired > ACTIVE_EXPIRE_CYCLE_LOOKUPS_PER_LOOP/4);
     }
 }
 
