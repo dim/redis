@@ -453,7 +453,7 @@ void mdbCron(void) {
         unsigned int iteration = 0;
         long long start = ustime(), timelimit;
 
-        timelimit = 1000000*REDIS_EXPIRELOOKUPS_TIME_PERC/server.hz/1000;
+        timelimit = 1000000*REDIS_EXPIRELOOKUPS_TIME_PERC/server.hz/100;
         if (timelimit <= 0) timelimit = 1;
 
         do {
