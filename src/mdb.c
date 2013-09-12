@@ -401,6 +401,38 @@ cleanup:
     return expired;
 }
 
+/* Active expiration iteration for MDB keys */
+void mdbActiveExpireCycle(int type) {
+    /* Some global state */
+    static int timelimit_exit = 0;        /* Time limit hit in previous call? */
+    static long long last_fast_cycle = 0; /* When last fast cycle ran. */
+
+    unsigned int iteration = 0, expired = 0;
+    long long start = ustime(), timelimit;
+
+    /* Don't start a fast cycle if the previous cycle exceeded time limit */
+    if (type == ACTIVE_EXPIRE_CYCLE_FAST) {
+        if (!timelimit_exit) return;
+        if (start < last_fast_cycle + ACTIVE_EXPIRE_CYCLE_FAST_DURATION*2) return;
+        last_fast_cycle = start;
+    }
+
+    /* Determine time limit */
+    timelimit = 1000000*ACTIVE_EXPIRE_CYCLE_SLOW_TIME_PERC/server.hz/100;
+    timelimit_exit = 0;
+    if (timelimit <= 0) timelimit = 1;
+
+    do {
+        expired = mdbActiveExpireRun();
+
+        /* check every 16 iterations if we reached time limit */
+        iteration++;
+        if ((iteration & 0xf) == 0 && (ustime()-start) > timelimit) timelimit_exit = 1;
+        if (timelimit_exit) return;
+
+    } while (expired > ACTIVE_EXPIRE_CYCLE_LOOKUPS_PER_LOOP/4);
+}
+
 /* Init config */
 void mdbInitConfig(void) {
     mdbc.enabled = 0;
@@ -448,23 +480,8 @@ void mdbCron(void) {
     if (!mdbc.enabled) return;
 
     /* Perform active expiration if enabled on master */;
-    if (server.active_expire_enabled && server.masterhost == NULL) {
-        int expired = 0;
-        unsigned int iteration = 0;
-        long long start = ustime(), timelimit;
-
-        timelimit = 1000000*ACTIVE_EXPIRE_CYCLE_SLOW_TIME_PERC/server.hz/100;
-        if (timelimit <= 0) timelimit = 1;
-
-        do {
-            expired = mdbActiveExpireRun();
-
-            /* check every 16 iterations if we reached time limit */
-            iteration++;
-            if ((iteration & 0xf) == 0 && (ustime()-start) > timelimit) break;
-
-        } while (expired > ACTIVE_EXPIRE_CYCLE_LOOKUPS_PER_LOOP/4);
-    }
+    if (server.active_expire_enabled && server.masterhost == NULL)
+        mdbActiveExpireCycle(ACTIVE_EXPIRE_CYCLE_SLOW);
 }
 
 /*================================= Commands ================================= */

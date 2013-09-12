@@ -1153,6 +1153,9 @@ void beforeSleep(struct aeEventLoop *eventLoop) {
     /* Run a fast expire cycle. */
     activeExpireCycle(ACTIVE_EXPIRE_CYCLE_FAST);
 
+    /* Run a fast MDB expire cycle. */
+    mdbActiveExpireCycle(ACTIVE_EXPIRE_CYCLE_FAST);
+
     /* Try to process pending commands for clients that were just unblocked. */
     while (listLength(server.unblocked_clients)) {
         ln = listFirst(server.unblocked_clients);

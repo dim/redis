@@ -36,6 +36,7 @@ int mdbRdbLoad(rio *rdb, long loops);
 int mdbRdbSave(rio *rdb, long long now);
 int mdbEnvOpen(void);
 void mdbEnvClose(void);
+void mdbActiveExpireCycle(int type);
 void mdbInitConfig(void);
 void mdbInit(void);
 void mdbCron(void);
