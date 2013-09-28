@@ -70,7 +70,7 @@ lua: .make-prerequisites
 
 luajit: .make-prerequisites
 	@printf '%b %b\n' $(MAKECOLOR)MAKE$(ENDCOLOR) $(BINCOLOR)$@$(ENDCOLOR)
-	cd luajit/src && $(MAKE) all
+	cd luajit/src && $(MAKE) libluajit.a
 
 .PHONY: luajit
 
