@@ -210,7 +210,7 @@ int luaRedisGenericCommand(lua_State *lua, int raise_error) {
         argv[j] = createStringObject((char*)lua_tostring(lua,j+1),
                                      lua_strlen(lua,j+1));
     }
-    
+
     /* Check if one of the arguments passed by the Lua script
      * is not a string or an integer (lua_isstring() return true for
      * integers as well). */
@@ -459,16 +459,18 @@ void luaLoadLib(lua_State *lua, const char *libname, lua_CFunction luafunc) {
 LUALIB_API int (luaopen_cjson) (lua_State *L);
 LUALIB_API int (luaopen_struct) (lua_State *L);
 LUALIB_API int (luaopen_cmsgpack) (lua_State *L);
+LUALIB_API int (luaopen_bit) (lua_State *L);
 
 void luaLoadLibraries(lua_State *lua) {
     luaLoadLib(lua, "", luaopen_base);
     luaLoadLib(lua, LUA_TABLIBNAME, luaopen_table);
     luaLoadLib(lua, LUA_STRLIBNAME, luaopen_string);
     luaLoadLib(lua, LUA_MATHLIBNAME, luaopen_math);
-    luaLoadLib(lua, LUA_DBLIBNAME, luaopen_debug); 
+    luaLoadLib(lua, LUA_DBLIBNAME, luaopen_debug);
     luaLoadLib(lua, "cjson", luaopen_cjson);
     luaLoadLib(lua, "struct", luaopen_struct);
     luaLoadLib(lua, "cmsgpack", luaopen_cmsgpack);
+    luaLoadLib(lua, "bit", luaopen_bit);
 
 #if 0 /* Stuff that we don't load currently, for sandboxing concerns. */
     luaLoadLib(lua, LUA_LOADLIBNAME, luaopen_package);
@@ -854,7 +856,7 @@ void evalGenericCommand(redisClient *c, int evalsha) {
 
     /* Select the right DB in the context of the Lua client */
     selectDb(server.lua_client,c->db->id);
-    
+
     /* Set an hook in order to be able to stop the script execution if it
      * is running for too much time.
      * We set the hook only if the time limit is enabled as the hook will
