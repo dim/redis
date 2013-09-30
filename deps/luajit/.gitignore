@@ -1,0 +1,6 @@
+src/host/buildvm 
+src/host/minilua
+src/luajit
+*.o
+*.a
+*.so

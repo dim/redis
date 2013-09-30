@@ -22,9 +22,6 @@ src/redis.conf
 deps/lua/src/lua
 deps/lua/src/luac
 deps/lua/src/liblua.a
-deps/luajit/src/luajit
-deps/luajit/src/libluajit.a
-deps/luajit/src/libluajit.so
 .make-*
 .prerequisites
 *.dSYM
