@@ -131,24 +131,6 @@ static void mdbPropagateExpire(MDB_val *mk) {
     decrRefCount(argv[1]);
 }
 
-static int mdbRedisExpire(MDB_val *mk) {
-    int rc;
-    MDB_txn *txn = NULL;
-
-    if ((rc = mdb_txn_begin(mdbc.env,NULL,0,&txn)) != MDB_SUCCESS)
-        return rc;
-
-    switch(rc = mdb_del(txn,mdbc.maindb,mk,NULL)) {
-    case MDB_SUCCESS:
-        rc = mdb_txn_commit(txn);
-        if (!rc) mdbPropagateExpire(mk);
-        break;
-    case MDB_NOTFOUND: rc = MDB_SUCCESS;
-    default: mdb_txn_abort(txn);
-    }
-    return rc;
-}
-
 static int mdbRedisFind(sds key, rmobj *mo, int shallow) {
     int rc = MDB_SUCCESS;
     MDB_val mk = {sdslen(key),key}, mv;
@@ -361,6 +343,7 @@ static int mdbActiveExpireRun(void) {
     long num = ACTIVE_EXPIRE_CYCLE_LOOKUPS_PER_LOOP;
     int lookup = MDB_SET_RANGE;
     MDB_val mk = {sdslen(mdbc.xlk), mdbc.xlk}, mv;
+    MDB_txn *txn = NULL;
 
     if ((rc = mdb_txn_renew(mdbc.txn)) != MDB_SUCCESS)
         goto mdberr;
@@ -383,8 +366,13 @@ static int mdbActiveExpireRun(void) {
         mdbLoadObject(&mv,&mo,1);
 
         if (mo.expireat > -1 && now > mo.expireat) {
+            if (txn == NULL && (rc = mdb_txn_begin(mdbc.env,NULL,0,&txn)) != MDB_SUCCESS)
+                goto mdberr;
+            if ((rc = mdb_del(txn,mdbc.maindb,&mk,NULL)) != MDB_SUCCESS)
+                goto mdberr;
+
+            mdbPropagateExpire(&mk);
             expired++;
-            mdbRedisExpire(&mk);
         }
     }
 
@@ -399,6 +387,7 @@ static int mdbActiveExpireRun(void) {
 mdberr:
     redisLog(REDIS_WARNING, "MDB: %s", mdb_strerror(rc));
 cleanup:
+    if (txn) mdb_txn_commit(txn);
     mdb_txn_reset(mdbc.txn);
     return expired;
 }
