@@ -382,8 +382,10 @@ static int mdbActiveExpireRun(void) {
         lookup = MDB_NEXT;
         mdbLoadObject(&mv,&mo,1);
 
-        if (mo.expireat > -1 && now > mo.expireat)
+        if (mo.expireat > -1 && now > mo.expireat) {
+            expired++;
             mdbRedisExpire(&mk);
+        }
     }
 
     /* move the cursor and store next key */
