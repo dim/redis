@@ -361,6 +361,7 @@ static int mdbActiveExpireRun(void) {
     long num = ACTIVE_EXPIRE_CYCLE_LOOKUPS_PER_LOOP;
     int lookup = MDB_SET_RANGE;
     MDB_val mk = {sdslen(mdbc.xlk), mdbc.xlk}, mv;
+    MDB_txn *txn = NULL;
 
     if ((rc = mdb_txn_renew(mdbc.txn)) != MDB_SUCCESS)
         goto mdberr;
@@ -382,8 +383,12 @@ static int mdbActiveExpireRun(void) {
         lookup = MDB_NEXT;
         mdbLoadObject(&mv,&mo,1);
 
-        if (mo.expireat > -1 && now > mo.expireat)
-            mdbRedisExpire(&mk);
+        if (mo.expireat > -1 && now > mo.expireat) {
+            if (txn == NULL && (rc = mdb_txn_begin(mdbc.env,NULL,0,&txn)) != MDB_SUCCESS) goto mdberr;
+            mdb_del(txn,mdbc.maindb,&mk,NULL);
+            expired++;
+            mdbPropagateExpire(&mk);
+        }
     }
 
     /* move the cursor and store next key */
@@ -397,6 +402,7 @@ static int mdbActiveExpireRun(void) {
 mdberr:
     redisLog(REDIS_WARNING, "MDB: %s", mdb_strerror(rc));
 cleanup:
+    if (txn) mdb_txn_commit(txn);
     mdb_txn_reset(mdbc.txn);
     return expired;
 }
