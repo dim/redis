@@ -8,6 +8,7 @@
 
 struct mdbConfigStruct {
     int enabled;      /* Boolean indicator */
+    int slave_expiration; /* Is expiration enabled on slaves */
     size_t mapsize;   /* Mapsize, configurable */
     int dbid;         /* Redis internal DBID */
     MDB_env *env;     /* Runtime MDB environment */

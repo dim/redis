@@ -339,6 +339,10 @@ void loadServerConfigFromString(char *config) {
             if ((mdbc.enabled = yesnotoi(argv[1])) == -1) {
                 err = "argument must be 'yes' or 'no'"; goto loaderr;
             }
+        } else if (!strcasecmp(argv[0],"mdb-slave-expiration") && argc == 2) {
+            if ((mdbc.slave_expiration = yesnotoi(argv[1])) == -1) {
+                err = "argument must be 'yes' or 'no'"; goto loaderr;
+            }
         } else if (!strcasecmp(argv[0],"mdbmapsize") && argc == 2) {
             mdbc.mapsize = memtoll(argv[1],NULL);
         } else if (!strcasecmp(argv[0],"hash-max-ziplist-entries") && argc == 2) {
@@ -864,6 +868,7 @@ void configGetCommand(redisClient *c) {
     config_get_bool_field("rdbchecksum", server.rdb_checksum);
     config_get_bool_field("activerehashing", server.activerehashing);
     config_get_bool_field("mdbenabled", mdbc.enabled);
+    config_get_bool_field("mdb-slave-expiration", mdbc.slave_expiration);
     config_get_bool_field("repl-disable-tcp-nodelay",
             server.repl_disable_tcp_nodelay);
     config_get_bool_field("aof-rewrite-incremental-fsync",

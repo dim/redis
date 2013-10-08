@@ -124,6 +124,8 @@ static int mdbRedisExists(MDB_txn *txn, sds key) {
 }
 
 static void mdbPropagateExpire(MDB_val *mk) {
+    if (mdbc.slave_expiration) return;
+
     robj *argv[2];
     argv[0] = mdbc.mmdel;
     argv[1] = createObject(REDIS_STRING,sdsnewlen(mk->mv_data,mk->mv_size));
@@ -439,6 +441,7 @@ void mdbActiveExpireCycle(void) {
 /* Init config */
 void mdbInitConfig(void) {
     mdbc.enabled = 0;
+    mdbc.slave_expiration = 0;
     mdbc.env = NULL;
     mdbc.txn = NULL;
     mdbc.cur = NULL;
@@ -482,8 +485,8 @@ void mdbCron(void) {
     /* Skip if MDB is disabled */
     if (!mdbc.enabled) return;
 
-    /* Perform active expiration if enabled on master */;
-    if (server.active_expire_enabled && server.masterhost == NULL)
+    /* Perform active expiration if enabled */;
+    if (server.active_expire_enabled && (server.masterhost == NULL || mdbc.slave_expiration))
         mdbActiveExpireCycle();
 }
 
