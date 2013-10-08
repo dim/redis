@@ -4,6 +4,7 @@
 #define MDB_EXPIRE_CYCLE_LOOKUPS_PER_LOOP 1000    /* Loopkups per loop. */
 #define MDB_EXPIRE_CYCLE_DEFAULT_INTERVAL 1000000 /* 1s */
 #define MDB_EXPIRE_CYCLE_MINIMUM_INTERVAL 50000   /* 50ms */
+#define MDB_EXPIRE_CYCLE_MAXIMUM_INTERVAL 5000000 /* 5s */
 
 struct mdbConfigStruct {
     int enabled;      /* Boolean indicator */

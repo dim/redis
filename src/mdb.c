@@ -410,9 +410,11 @@ void mdbActiveExpireCycle(void) {
     /* Ten cycles after last update */
     if (start > last_update + interval*10) {
         /* Increase/decrease interval based on last performances */
-        if (exceedance > 10) interval = interval * 1.2;
-        else if (exceedance < 3) interval = interval * 0.9;
+        if (exceedance > 14) interval = interval * 1.2;
+        else if (exceedance < 4) interval = interval * 0.9;
 
+        if (interval > MDB_EXPIRE_CYCLE_MAXIMUM_INTERVAL)
+            interval = MDB_EXPIRE_CYCLE_MAXIMUM_INTERVAL;
         if (interval < MDB_EXPIRE_CYCLE_MINIMUM_INTERVAL)
             interval = MDB_EXPIRE_CYCLE_MINIMUM_INTERVAL;
 
