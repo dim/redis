@@ -7,7 +7,7 @@
 #define REDIS_MMSET_NX (1<<0)     /* Set if key not exists. */
 #define REDIS_MMSET_XX (1<<1)     /* Set if key exists. */
 #define REDIS_MDB_ROLLBACK (MDB_LAST_ERRCODE+1)
-#define REDIS_MDB_CHUNKSIZE 65536
+#define REDIS_MDB_CHUNKSIZE 1024
 
 #if (BYTE_ORDER == LITTLE_ENDIAN)
 #define htonll(v) intrev64(v)
@@ -248,8 +248,7 @@ int mdbRdbLoad(rio *rdb, long loops) {
      * still run through the file for correct checksum */
     int perform = mdbc.enabled && server.masterhost != NULL;
     uint64_t size, chunksize;
-    unsigned char buffer[REDIS_MDB_CHUNKSIZE];
-    char tmpfile[256];
+    char buffer[REDIS_MDB_CHUNKSIZE], datafile[8] = "data.mdb";
     int fd = -1;
 
     /* Read data length */
@@ -258,10 +257,8 @@ int mdbRdbLoad(rio *rdb, long loops) {
 
     /* Close env, open data file */
     if (perform) {
-        snprintf(tmpfile,256,
-            "temp-%d.%ld.rdb",(int)server.unixtime,(long int)getpid());
-
-        if ((fd = open(tmpfile,O_CREAT|O_WRONLY|O_EXCL,0664)) == -1) {
+        mdbEnvClose();
+        if ((fd = open(datafile,O_CREAT|O_WRONLY,0644)) == -1) {
             redisLog(REDIS_WARNING,"MDB: Opening data file failed: %s",strerror(errno));
             goto rerr;
         }
@@ -285,16 +282,9 @@ int mdbRdbLoad(rio *rdb, long loops) {
     /* EOF should follow in the very end */
     if (rdbLoadType(rdb) != REDIS_RDB_OPCODE_EOF) goto rerr;
 
-    /* Close env, rename tempfile, reopen env */
+    /* Re-open env */
     if (perform) {
-        fsync(fd);
         close(fd);
-
-        mdbEnvClose();
-        if (rename(tmpfile,"data.mdb") == -1) {
-            redisLog(REDIS_WARNING,"MDB: Failed to rename the temp DB into data.mdb: %s",strerror(errno));
-            goto rerr;
-        }
         if (mdbEnvOpen() != MDB_SUCCESS) goto rerr;
     }
 
