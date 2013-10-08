@@ -340,7 +340,7 @@ void mdbEnvClose(void) {
 static int mdbActiveExpireRun(void) {
     int rc = MDB_SUCCESS, expired = 0;
     long long now = mstime();
-    long num = ACTIVE_EXPIRE_CYCLE_LOOKUPS_PER_LOOP;
+    long num = MDB_EXPIRE_CYCLE_LOOKUPS_PER_LOOP;
     int lookup = MDB_SET_RANGE;
     MDB_val mk = {sdslen(mdbc.xlk), mdbc.xlk}, mv;
     MDB_txn *txn = NULL;
@@ -393,35 +393,49 @@ cleanup:
 }
 
 /* Active expiration iteration for MDB keys */
-void mdbActiveExpireCycle(int type) {
+void mdbActiveExpireCycle(void) {
     /* Some global state */
-    static int timelimit_exit = 0;        /* Time limit hit in previous call? */
-    static long long last_fast_cycle = 0; /* When last fast cycle ran. */
+    static long long last_cycle = 0; /* When last cycle ran. */
+    static long long last_update = 0; /* When interval was last updated. */
+    static unsigned long long interval = MDB_EXPIRE_CYCLE_DEFAULT_INTERVAL;
+    static unsigned int exceedance = 1; /* Rate at which runtime exceeds time limit */
 
-    unsigned int iteration = 0, expired = 0;
-    long long start = ustime(), timelimit;
+    unsigned int expired = 0;
+    long long start = ustime(), timelimit = 0, runtime = 0;
 
-    /* Don't start a fast cycle if the previous cycle exceeded time limit */
-    if (type == ACTIVE_EXPIRE_CYCLE_FAST) {
-        if (!timelimit_exit) return;
-        if (start < last_fast_cycle + ACTIVE_EXPIRE_CYCLE_FAST_DURATION*2) return;
-        last_fast_cycle = start;
+    /* Don't start a cycle unless due */
+    if (start < last_cycle + interval) return;
+    last_cycle = start;
+
+    /* Ten cycles after last update */
+    if (start > last_update + interval*10) {
+        /* Increase/decrease interval based on last performances */
+        if (exceedance > 10) interval = interval * 1.2;
+        else if (exceedance < 3) interval = interval * 0.9;
+
+        if (interval < MDB_EXPIRE_CYCLE_MINIMUM_INTERVAL)
+            interval = MDB_EXPIRE_CYCLE_MINIMUM_INTERVAL;
+
+        exceedance = 1;
+        last_update = start;
     }
 
     /* Determine time limit */
     timelimit = 1000000*ACTIVE_EXPIRE_CYCLE_SLOW_TIME_PERC/server.hz/100;
-    timelimit_exit = 0;
     if (timelimit <= 0) timelimit = 1;
 
+    int total = 0;
     do {
         expired = mdbActiveExpireRun();
+        runtime = (ustime()-start);
+        total += expired;
+    } while (expired > MDB_EXPIRE_CYCLE_LOOKUPS_PER_LOOP/4 && runtime < timelimit);
 
-        /* check every 16 iterations if we reached time limit */
-        iteration++;
-        if ((iteration & 0xf) == 0 && (ustime()-start) > timelimit) timelimit_exit = 1;
-        if (timelimit_exit) return;
+    /* Increase exceedance, if runtime exceeded time limit */
+    if (runtime/timelimit > exceedance)
+        exceedance = runtime/timelimit;
 
-    } while (expired > ACTIVE_EXPIRE_CYCLE_LOOKUPS_PER_LOOP/4);
+    redisLog(REDIS_NOTICE, "Expired %u in %d at %d every %dms", total, runtime/1000, exceedance, interval/1000);
 }
 
 /* Init config */
@@ -472,7 +486,7 @@ void mdbCron(void) {
 
     /* Perform active expiration if enabled on master */;
     if (server.active_expire_enabled && server.masterhost == NULL)
-        mdbActiveExpireCycle(ACTIVE_EXPIRE_CYCLE_SLOW);
+        mdbActiveExpireCycle();
 }
 
 /*================================= Commands ================================= */

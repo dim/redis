@@ -1,6 +1,10 @@
 #include <lmdb.h>
 #include "rio.h"
 
+#define MDB_EXPIRE_CYCLE_LOOKUPS_PER_LOOP 1000    /* Loopkups per loop. */
+#define MDB_EXPIRE_CYCLE_DEFAULT_INTERVAL 1000000 /* 1s */
+#define MDB_EXPIRE_CYCLE_MINIMUM_INTERVAL 50000   /* 50ms */
+
 struct mdbConfigStruct {
     int enabled;      /* Boolean indicator */
     size_t mapsize;   /* Mapsize, configurable */
@@ -36,7 +40,6 @@ int mdbRdbLoad(rio *rdb, long loops);
 int mdbRdbSave(rio *rdb, long long now);
 int mdbEnvOpen(void);
 void mdbEnvClose(void);
-void mdbActiveExpireCycle(int type);
 void mdbInitConfig(void);
 void mdbInit(void);
 void mdbCron(void);
