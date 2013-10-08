@@ -424,18 +424,14 @@ void mdbActiveExpireCycle(void) {
     timelimit = 1000000*ACTIVE_EXPIRE_CYCLE_SLOW_TIME_PERC/server.hz/100;
     if (timelimit <= 0) timelimit = 1;
 
-    int total = 0;
     do {
         expired = mdbActiveExpireRun();
         runtime = (ustime()-start);
-        total += expired;
     } while (expired > MDB_EXPIRE_CYCLE_LOOKUPS_PER_LOOP/4 && runtime < timelimit);
 
     /* Increase exceedance, if runtime exceeded time limit */
     if (runtime/timelimit > exceedance)
         exceedance = runtime/timelimit;
-
-    redisLog(REDIS_NOTICE, "Expired %u in %d at %d every %dms", total, runtime/1000, exceedance, interval/1000);
 }
 
 /* Init config */
