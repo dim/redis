@@ -22,6 +22,8 @@ src/redis.conf
 deps/lua/src/lua
 deps/lua/src/luac
 deps/lua/src/liblua.a
+deps/luajit/src/host/buildvm
+deps/luajit/src/host/minilua
 .make-*
 .prerequisites
 *.dSYM
