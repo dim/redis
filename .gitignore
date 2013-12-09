@@ -24,6 +24,7 @@ deps/lua/src/luac
 deps/lua/src/liblua.a
 deps/luajit/src/host/buildvm
 deps/luajit/src/host/minilua
+deps/luajit/src/lj_vm.s
 .make-*
 .prerequisites
 *.dSYM
