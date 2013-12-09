@@ -14,6 +14,8 @@
 
 release_hdr := $(shell sh -c './mkreleasehdr.sh')
 uname_S := $(shell sh -c 'uname -s 2>/dev/null || echo not')
+getlen_L := $(shell getconf LONG_BIT)
+
 OPTIMIZATION?=-O2
 DEPENDENCY_TARGETS=hiredis linenoise luajit
 
@@ -74,6 +76,12 @@ ifeq ($(MALLOC),jemalloc)
   DEPENDENCY_TARGETS+= jemalloc
   FINAL_CFLAGS+= -DUSE_JEMALLOC -I../deps/jemalloc/include
   FINAL_LIBS+= ../deps/jemalloc/lib/libjemalloc.a -ldl
+endif
+
+ifeq ($(uname_S),Darwin)
+	ifeq ($(getlen_L),64)
+    FINAL_LDFLAGS+= -pagezero_size 10000 -image_base 100000000
+  endif
 endif
 
 REDIS_CC=$(QUIET_CC)$(CC) $(FINAL_CFLAGS)
